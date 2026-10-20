@@ -2,7 +2,6 @@ import datetime
 import urllib.parse
 import streamlit as st
 import pandas as pd
-import os
 import json
 from supabase import create_client, Client
 
@@ -19,25 +18,7 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# --- DEFAULT SEEDING FOR FIRE SERVICE ---
-def seed_default_fire_products():
-    if not supabase: return
-    try:
-        res = supabase.table("fire_products").select("pid").execute()
-        if not res.data:
-            defaults = [
-                {"pid": "FS101", "name": "ABC Powder Extinguisher 4KG", "category": "Extinguisher", "cost_price": 800.0, "price_per_unit": 1400.0, "stock_qty": 50.0},
-                {"pid": "FS102", "name": "CO2 Fire Extinguisher 4.5KG", "category": "Extinguisher", "cost_price": 2200.0, "price_per_unit": 3500.0, "stock_qty": 30.0},
-                {"pid": "FS103", "name": "Fire Hose Pipe 15 Mtr", "category": "Hose Pipe", "cost_price": 1200.0, "price_per_unit": 2000.0, "stock_qty": 20.0},
-                {"pid": "FS104", "name": "Smoke Detector Alarm", "category": "Alarm System", "cost_price": 350.0, "price_per_unit": 750.0, "stock_qty": 100.0},
-            ]
-            supabase.table("fire_products").insert(defaults).execute()
-    except:
-        pass
-
-seed_default_fire_products()
-
-st.set_page_config(page_title="Shivraj Fire Service | Malkapur", page_icon="🧯", layout="wide")
+st.set_page_config(page_title="Shivraj Fire & Industrial Gases | Malkapur", page_icon="🧯", layout="wide")
 
 # --- DATABASE HELPER FUNCTIONS ---
 def get_db_products():
@@ -49,12 +30,15 @@ def get_db_products():
             prods[r["pid"]] = {
                 "name": r["name"],
                 "category": r.get("category", "General"),
-                "cost_price": float(r["cost_price"]),
-                "price_per_unit": float(r["price_per_unit"]),
-                "stock_qty": float(r["stock_qty"])
+                "gas_type": r.get("gas_type", "N/A"),
+                "capacity": r.get("capacity", "N/A"),
+                "service_type": r.get("service_type", "Supply"),
+                "cost_price": float(r.get("cost_price", 0)),
+                "price_per_unit": float(r.get("price_per_unit", 0)),
+                "stock_qty": float(r.get("stock_qty", 0))
             }
         return prods
-    except:
+    except Exception as e:
         return {}
 
 def update_db_stock(pid, new_stock):
@@ -64,13 +48,16 @@ def update_db_stock(pid, new_stock):
     except:
         pass
 
-def add_db_product(pid, name, category, cost_price, price_per_unit, stock_qty):
+def add_db_product(pid, name, category, gas_type, capacity, service_type, cost_price, price_per_unit, stock_qty):
     if not supabase: return False
     try:
         data = {
             "pid": str(pid),
             "name": str(name),
             "category": str(category),
+            "gas_type": str(gas_type),
+            "capacity": str(capacity),
+            "service_type": str(service_type),
             "cost_price": float(cost_price),
             "price_per_unit": float(price_per_unit),
             "stock_qty": float(stock_qty)
@@ -122,13 +109,6 @@ def insert_db_log(log_data):
     except Exception as e:
         st.error(f"Error saving sales log: {e}")
 
-def delete_db_log(log_id):
-    if not supabase: return
-    try:
-        supabase.table("fire_sales_logs").delete().eq("id", log_id).execute()
-    except:
-        pass
-
 def update_db_credit_payment(log_id, new_paid_total, new_balance_due, status, payment_str):
     if not supabase: return
     try:
@@ -153,13 +133,6 @@ def add_db_expense(date, category, amount, description):
     except:
         pass
 
-def delete_db_expense(exp_id):
-    if not supabase: return
-    try:
-        supabase.table("fire_expenses").delete().eq("id", exp_id).execute()
-    except:
-        pass
-
 if "cart" not in st.session_state:
     st.session_state.cart = []
 
@@ -174,7 +147,7 @@ with st.sidebar:
         for index, c_item in enumerate(st.session_state.cart):
             item_cost = float(c_item['price']) * float(c_item['qty'])
             cart_total += item_cost
-            st.markdown(f"**{index+1}. {c_item['name']}**\n{c_item['qty']} Qty x ₹{c_item['price']:,.2f} = **₹{item_cost:,.2f}**")
+            st.markdown(f"**{index+1}. {c_item['name']}**\n[{c_item['capacity']} | {c_item['service_type']}]\n{c_item['qty']} Qty x ₹{c_item['price']:,.2f} = **₹{item_cost:,.2f}**")
 
         if st.button("🗑️ Clear Cart"):
             st.session_state.cart = []
@@ -183,16 +156,16 @@ with st.sidebar:
         st.markdown(f"### **Grand Total: ₹{cart_total:,.2f}**")
         st.divider()
         
-        st.subheader("📝 Order & Payment Details")
-        buyer_name = st.text_input("Customer / Company Name:").strip()
+        st.subheader("📝 Customer & Site Details")
+        buyer_name = st.text_input("Customer / Hospital / Factory Name:").strip()
         buyer_phone = st.text_input("WhatsApp Phone Number:").strip()
-        location = st.text_input("Site / Location Address:").strip()
+        location = st.text_input("Site / Plant / Address:").strip()
         
         payment_mode = st.selectbox("Payment Method:", ["Cash", "UPI / GPay / PhonePe", "Bank Transfer", "Cheque"])
         paid_amount = float(st.number_input("Amount Paid Now (₹):", min_value=0.0, max_value=float(cart_total), value=float(cart_total)))
         credit_amount = float(max(0.0, cart_total - paid_amount))
 
-        if st.button("Confirm Order & Generate Invoice", type="primary", use_container_width=True):
+        if st.button("Confirm Order & Generate WhatsApp Invoice", type="primary", use_container_width=True):
             if not buyer_name or not location:
                 st.error("❌ Please fill in Customer Name and Location Address.")
             elif not st.session_state.cart:
@@ -213,26 +186,31 @@ with st.sidebar:
                         update_db_stock(c_item['pid'], current_prods[c_item['pid']]['stock_qty'] - float(c_item['qty']))
 
                     timestamp = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-                    items_str = "\n".join([f"- {it['name']} ({it['qty']} Nos @ ₹{it['price']})" for it in st.session_state.cart])
+                    next_refill_date = (datetime.datetime.now() + datetime.timedelta(days=365)).strftime("%d-%m-%Y")
+                    
+                    items_str = "\n".join([f"- {it['name']} [{it['capacity']} - {it['service_type']}] ({it['qty']} Qty @ ₹{it['price']})" for it in st.session_state.cart])
                     payment_desc = f"{payment_mode} (Paid: ₹{paid_amount:,.2f})"
 
                     wa_msg = (
-                        f"🧯 *SHIVRAJ FIRE SERVICE* 🧯\n"
+                        f"🧯 *SHIVRAJ FIRE & INDUSTRIAL GASES* 🏥\n"
                         f"📍 *Address:* Laxmi Nagar, Near Old BSNL Office,\n"
                         f"Malkapur, Dist. Buldhana\n"
                         f"👥 *Prop:* Swapnil Deshmukh & Ganesh Deshmukh\n"
                         f"📞 *Contact:* 9011763817 (Ganesh Deshmukh)\n"
                         f"--------------------------------\n"
                         f"📅 Date: {timestamp}\n"
-                        f"👤 Customer: {buyer_name}\n"
-                        f"📍 Site: {location}\n"
-                        f"📦 Items / Services:\n{items_str}\n"
+                        f"👤 Client/Hospital: {buyer_name}\n"
+                        f"📍 Site Address: {location}\n"
+                        f"--------------------------------\n"
+                        f"📦 Items & Cylinder Services:\n{items_str}\n"
                         f"--------------------------------\n"
                         f"💰 Total Amount: ₹{cart_total:,.2f}\n"
                         f"💵 Paid Amount: ₹{paid_amount:,.2f}\n"
                         f"🔴 Balance Due: ₹{credit_amount:,.2f}\n"
                         f"--------------------------------\n"
-                        f"Thank you for choosing Shivraj Fire Service! 🙏"
+                        f"🗓️ *Next Refilling / Service Due Date:* {next_refill_date}\n"
+                        f"🛡️ *Guarantee/Warranty:* 1 Year Testing & Safety Warranty\n"
+                        f"Thank you for choosing Shivraj Services! 🙏"
                     )
 
                     insert_db_log({
@@ -247,11 +225,11 @@ with st.sidebar:
                     st.balloons()
                     st.rerun()
 
-# --- HEADER SECTION WITH ADDRESS, OWNERS NAME & PHONE ---
-st.title("🧯 SHIVRAJ FIRE SERVICE")
+# --- HEADER SECTION ---
+st.title("🧯 SHIVRAJ FIRE SERVICE & INDUSTRIAL GASES 🏥")
 st.markdown("📍 **Address:** Laxmi Nagar, Near Old BSNL Office, Malkapur, Dist. Buldhana")
 st.markdown("👥 **Proprietors:** Swapnil Deshmukh | Ganesh Deshmukh (📞 **9011763817**)")
-st.caption("Complete Fire Safety Solutions, Equipment Sales & Refilling Management System")
+st.caption("Fire Safety Solutions, Medical Oxygen Supply & Industrial Gases (Nitrogen, Hydrogen, Chemical Gases) Management")
 st.divider()
 
 current_logs = get_db_logs()
@@ -274,25 +252,35 @@ st.divider()
 
 # --- TABS CONTROL ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🧯 Fire Safety Catalog", 
+    "🧯 Equipment & Gas Catalog", 
     "📜 Sales & Billing Records",
     "📉 Credit Ledger (उधारी खाते)",
     "📈 Profit & Expenses",
-    "⚙️ Inventory & Stock Control"
+    "⚙️ Inventory & Cylinder Control"
 ])
 
 with tab1:
-    st.subheader("Equipment Sales & Quick Booking")
+    st.subheader("Equipment & Gas Booking Catalog")
     prods = get_db_products()
     if not prods:
-        st.info("No fire safety items found.")
+        st.info("No items or gases found in inventory.")
     else:
+        # Category Filter
+        cat_filter = st.selectbox("🔍 Filter by Category:", ["All Categories", "🧯 Fire Safety Equipment", "🏥 Medical Oxygen Gases", "🏭 Industrial & Chemical Gases", "⚙️ Accessories & Spares"])
+        
+        filtered_prods = {}
+        for pid, p in prods.items():
+            if cat_filter == "All Categories" or cat_filter in p['category']:
+                filtered_prods[pid] = p
+
         cols = st.columns(3)
-        for i, (pid, p) in enumerate(prods.items()):
+        for i, (pid, p) in enumerate(filtered_prods.items()):
             with cols[i % 3]:
                 with st.container(border=True):
                     st.markdown(f"### **{p['name']}**")
                     st.caption(f"Category: `{p['category']}` | ID: `{pid}`")
+                    st.markdown(f"🧪 **Gas / Type:** `{p['gas_type']}` | ⚖️ **Capacity:** `{p['capacity']}`")
+                    st.markdown(f"🔄 **Type:** `{p['service_type']}`")
                     st.markdown(f"💰 **Selling Rate:** ₹{p['price_per_unit']:,.2f}")
                     
                     if p['stock_qty'] <= 5:
@@ -310,7 +298,10 @@ with tab1:
                                     item['qty'] += qty_inp
                                     break
                             else:
-                                st.session_state.cart.append({"pid": pid, "name": p['name'], "price": p['price_per_unit'], "qty": qty_inp})
+                                st.session_state.cart.append({
+                                    "pid": pid, "name": p['name'], "price": p['price_per_unit'], 
+                                    "qty": qty_inp, "capacity": p['capacity'], "service_type": p['service_type']
+                                })
                             st.success("Item added to cart!")
                             st.rerun()
 
@@ -320,17 +311,17 @@ with tab2:
     if not logs:
         st.info("No transaction logs available.")
     else:
-        search = st.text_input("🔍 Search Customer Name / Location:", key="s_log").strip().lower()
+        search = st.text_input("🔍 Search Customer / Hospital / Location:", key="s_log").strip().lower()
         filtered = [l for l in logs if search in l['buyer'].lower() or search in l['location'].lower()]
         
         for log in reversed(filtered):
             with st.container(border=True):
-                st.markdown(f"**Date:** `{log['time']}` | **Customer:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
+                st.markdown(f"**Date:** `{log['time']}` | **Client:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
                 st.markdown(f"💰 **Total Invoice:** ₹{log['amount']:,.2f} | 💵 **Paid:** ₹{log['paid_amount']:,.2f} | 🔴 **Due Balance:** **₹{log['balance_due']:,.2f}**")
                 
                 if log.get('phone'):
                     wa_url = f"https://wa.me/{log['phone']}?text={urllib.parse.quote(log['msg'])}"
-                    st.markdown(f"📲 [Send Invoice via WhatsApp]({wa_url})")
+                    st.markdown(f"📲 [Send WhatsApp Invoice & Certificate Note]({wa_url})")
 
 with tab3:
     st.subheader("📉 Credit Ledger & Balance Dues (उधारी ट्रॅकिंग)")
@@ -342,7 +333,7 @@ with tab3:
             with st.container(border=True):
                 c1, c2 = st.columns([2, 2])
                 with c1:
-                    st.markdown(f"👤 **Customer:** {p_log['buyer']} ({p_log['location']})")
+                    st.markdown(f"👤 **Customer/Client:** {p_log['buyer']} ({p_log['location']})")
                     st.markdown(f"💰 Total Amount: ₹{p_log['amount']:,.2f} | Paid: ₹{p_log['paid_amount']:,.2f}")
                     st.markdown(f"🔴 **Outstanding Balance: ₹{p_log['balance_due']:,.2f}**")
                 with c2:
@@ -364,10 +355,10 @@ with tab4:
     if admin_p == "admin123":
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            st.markdown("### **Record Business Expense**")
+            st.markdown("### **Record Expense**")
             with st.form("exp_form"):
                 exp_date = st.text_input("Date:", value=datetime.datetime.now().strftime("%d-%m-%Y"))
-                exp_cat = st.selectbox("Category:", ["Refilling Charges", "Transport & Fuel", "Labor / Technicians", "Office & Misc"])
+                exp_cat = st.selectbox("Category:", ["Refilling & Gas Purchase", "Transport & Cylinder Freight", "Labor & Technicians", "Office & Misc"])
                 exp_amt = float(st.number_input("Amount (₹):", min_value=0.0, value=500.0))
                 exp_notes = st.text_input("Expense Details:")
                 if st.form_submit_button("Save Expense"):
@@ -382,28 +373,32 @@ with tab4:
             st.metric("True Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
 
 with tab5:
-    st.subheader("⚙️ Inventory Warehouse Control")
+    st.subheader("⚙️ Inventory & Stock Control")
     admin_inv = st.text_input("Enter Admin Password:", type="password", key="pass_inv")
     if admin_inv == "admin123":
         ic1, ic2 = st.columns(2)
         with ic1:
-            st.markdown("### **Add / Update Fire Equipment**")
-            pid = st.text_input("Item ID (e.g. FS105):").strip().upper()
-            pname = st.text_input("Equipment Name:").strip()
-            pcat = st.selectbox("Category:", ["Extinguisher", "Hose Pipe", "Alarm System", "Refilling", "Spare Parts"])
+            st.markdown("### **Add / Update Gas Cylinder or Equipment**")
+            pid = st.text_input("Item ID (e.g. FS105 / MO101 / IG201):").strip().upper()
+            pname = st.text_input("Product / Cylinder Name (e.g. ABC Extinguisher / Medical Oxygen Jumbo):").strip()
+            pcat = st.selectbox("Category:", ["🧯 Fire Safety Equipment", "🏥 Medical Oxygen Gases", "🏭 Industrial & Chemical Gases", "⚙️ Accessories & Spares"])
+            pgas = st.selectbox("Gas / Type:", ["ABC Powder", "CO2", "Foam", "Water", "Medical Oxygen (O2)", "Nitrogen (N2)", "Hydrogen (H2)", "Argon", "Acetylene (DA)", "Chemical Mix / N/A"])
+            pcap = st.selectbox("Capacity / Size:", ["1 KG / Litre", "2 KG", "4 KG", "4.5 KG", "6 KG", "9 KG", "10 Litre (B-Type)", "47 Litre (Jumbo D-Type)", "15 Mtr", "N/A"])
+            pserv = st.selectbox("Service Type:", ["New Supply", "Refilling Service", "Cylinder Rental / Deposit"])
+            
             pcost = float(st.number_input("Cost Price (₹):", value=500.0))
-            pprice = float(st.number_input("Selling Price (₹):", value=1000.0))
+            pprice = float(st.number_input("Selling Rate (₹):", value=1000.0))
             pstock = float(st.number_input("Available Stock Quantity:", value=50.0))
 
             if st.button("Save Item to Database"):
                 if pid and pname:
-                    if add_db_product(pid, pname, pcat, pcost, pprice, pstock):
-                        st.success(f"Product '{pname}' saved successfully!")
+                    if add_db_product(pid, pname, pcat, pgas, pcap, pserv, pcost, pprice, pstock):
+                        st.success(f"Item '{pname}' saved successfully!")
                         st.rerun()
                 else:
                     st.error("Please fill Item ID and Name.")
         with ic2:
-            st.markdown("### **Remove Equipment**")
+            st.markdown("### **Remove Equipment / Gas Item**")
             cur_prods = get_db_products()
             if cur_prods:
                 del_id = st.selectbox("Select Equipment to Delete:", list(cur_prods.keys()))
