@@ -284,3 +284,130 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.subheader("Equipment Sales & Quick Booking")
     prods = get_db_products()
+    if not prods:
+        st.info("No fire safety items found.")
+    else:
+        cols = st.columns(3)
+        for i, (pid, p) in enumerate(prods.items()):
+            with cols[i % 3]:
+                with st.container(border=True):
+                    st.markdown(f"### **{p['name']}**")
+                    st.caption(f"Category: `{p['category']}` | ID: `{pid}`")
+                    st.markdown(f"💰 **Selling Rate:** ₹{p['price_per_unit']:,.2f}")
+                    
+                    if p['stock_qty'] <= 5:
+                        st.markdown(f"⚠️ **Stock:** `{p['stock_qty']} Units` *(Low Stock Alert)*")
+                    else:
+                        st.markdown(f"📦 **Stock:** `{p['stock_qty']} Units`")
+
+                    qty_inp = float(st.number_input("Quantity:", min_value=1.0, value=1.0, key=f"q_{pid}"))
+                    if st.button("🛒 Add to Cart", key=f"btn_{pid}", use_container_width=True):
+                        if qty_inp > p['stock_qty']:
+                            st.error("Exceeds available stock quantity!")
+                        else:
+                            for item in st.session_state.cart:
+                                if item['pid'] == pid:
+                                    item['qty'] += qty_inp
+                                    break
+                            else:
+                                st.session_state.cart.append({"pid": pid, "name": p['name'], "price": p['price_per_unit'], "qty": qty_inp})
+                            st.success("Item added to cart!")
+                            st.rerun()
+
+with tab2:
+    st.subheader("Sales History & WhatsApp Invoices")
+    logs = get_db_logs()
+    if not logs:
+        st.info("No transaction logs available.")
+    else:
+        search = st.text_input("🔍 Search Customer Name / Location:", key="s_log").strip().lower()
+        filtered = [l for l in logs if search in l['buyer'].lower() or search in l['location'].lower()]
+        
+        for log in reversed(filtered):
+            with st.container(border=True):
+                st.markdown(f"**Date:** `{log['time']}` | **Customer:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
+                st.markdown(f"💰 **Total Invoice:** ₹{log['amount']:,.2f} | 💵 **Paid:** ₹{log['paid_amount']:,.2f} | 🔴 **Due Balance:** **₹{log['balance_due']:,.2f}**")
+                
+                if log.get('phone'):
+                    wa_url = f"https://wa.me/{log['phone']}?text={urllib.parse.quote(log['msg'])}"
+                    st.markdown(f"📲 [Send Invoice via WhatsApp]({wa_url})")
+
+with tab3:
+    st.subheader("📉 Credit Ledger & Balance Dues (उधारी ट्रॅकिंग)")
+    pending = [l for l in get_db_logs() if l['balance_due'] > 0]
+    if not pending:
+        st.success("🎉 All accounts clear! No pending balance due.")
+    else:
+        for p_log in pending:
+            with st.container(border=True):
+                c1, c2 = st.columns([2, 2])
+                with c1:
+                    st.markdown(f"👤 **Customer:** {p_log['buyer']} ({p_log['location']})")
+                    st.markdown(f"💰 Total Amount: ₹{p_log['amount']:,.2f} | Paid: ₹{p_log['paid_amount']:,.2f}")
+                    st.markdown(f"🔴 **Outstanding Balance: ₹{p_log['balance_due']:,.2f}**")
+                with c2:
+                    p_amt = float(st.number_input("Received Payment (₹):", min_value=0.0, max_value=float(p_log['balance_due']), key=f"p_{p_log['id']}"))
+                    if st.button("💵 Clear Partial Payment", key=f"pay_btn_{p_log['id']}"):
+                        if p_amt > 0:
+                            new_paid = p_log['paid_amount'] + p_amt
+                            new_due = p_log['balance_due'] - p_amt
+                            status = "Paid" if new_due <= 0 else f"Pending (Due: ₹{new_due:,.2f})"
+                            pay_log = p_log['payment'] + f"\n-> Received ₹{p_amt:,.2f} on {datetime.datetime.now().strftime('%d-%m-%Y')}"
+                            
+                            update_db_credit_payment(p_log['id'], new_paid, new_due, status, pay_log)
+                            st.success(f"Recorded ₹{p_amt}! Remaining: ₹{new_due}")
+                            st.rerun()
+
+with tab4:
+    st.subheader("📈 Financial Profit & Expense Management")
+    admin_p = st.text_input("Enter Admin Password:", type="password", key="pass_fin")
+    if admin_p == "admin123":
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            st.markdown("### **Record Business Expense**")
+            with st.form("exp_form"):
+                exp_date = st.text_input("Date:", value=datetime.datetime.now().strftime("%d-%m-%Y"))
+                exp_cat = st.selectbox("Category:", ["Refilling Charges", "Transport & Fuel", "Labor / Technicians", "Office & Misc"])
+                exp_amt = float(st.number_input("Amount (₹):", min_value=0.0, value=500.0))
+                exp_notes = st.text_input("Expense Details:")
+                if st.form_submit_button("Save Expense"):
+                    add_db_expense(exp_date, exp_cat, exp_amt, exp_notes)
+                    st.success("Expense saved!")
+                    st.rerun()
+
+        with col_f2:
+            st.markdown("### **Overall Profit Breakdown**")
+            st.metric("Total Gross Sales Margin", f"₹{total_gross_profit:,.2f}")
+            st.metric("Total Operational Expenses", f"₹{total_expenses_amt:,.2f}")
+            st.metric("True Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
+
+with tab5:
+    st.subheader("⚙️ Inventory Warehouse Control")
+    admin_inv = st.text_input("Enter Admin Password:", type="password", key="pass_inv")
+    if admin_inv == "admin123":
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            st.markdown("### **Add / Update Fire Equipment**")
+            pid = st.text_input("Item ID (e.g. FS105):").strip().upper()
+            pname = st.text_input("Equipment Name:").strip()
+            pcat = st.selectbox("Category:", ["Extinguisher", "Hose Pipe", "Alarm System", "Refilling", "Spare Parts"])
+            pcost = float(st.number_input("Cost Price (₹):", value=500.0))
+            pprice = float(st.number_input("Selling Price (₹):", value=1000.0))
+            pstock = float(st.number_input("Available Stock Quantity:", value=50.0))
+
+            if st.button("Save Item to Database"):
+                if pid and pname:
+                    if add_db_product(pid, pname, pcat, pcost, pprice, pstock):
+                        st.success(f"Product '{pname}' saved successfully!")
+                        st.rerun()
+                else:
+                    st.error("Please fill Item ID and Name.")
+        with ic2:
+            st.markdown("### **Remove Equipment**")
+            cur_prods = get_db_products()
+            if cur_prods:
+                del_id = st.selectbox("Select Equipment to Delete:", list(cur_prods.keys()))
+                if st.button("Delete Item"):
+                    delete_db_product(del_id)
+                    st.success("Item removed successfully!")
+                    st.rerun()
