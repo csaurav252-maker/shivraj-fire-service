@@ -89,7 +89,7 @@ def get_db_logs():
             logs.append({
                 "id": r["id"], "time": r["time"], "buyer": r["buyer"], "phone": r["phone"], "location": r["location"],
                 "items": items_parsed, "amount": float(r["amount"]), "paid_amount": float(r["paid_amount"]), 
-                "profit": float(r["profit"]), "balance_due": float(r["balance_due"]), 
+                "profit": float(r.get("profit", 0)), "balance_due": float(r["balance_due"]), 
                 "payment": r["payment"], "msg": r["msg"], "status": r["status"]
             })
         return logs
@@ -108,6 +108,13 @@ def insert_db_log(log_data):
         supabase.table("fire_sales_logs").insert(payload).execute()
     except Exception as e:
         st.error(f"Error saving sales log: {e}")
+
+def delete_db_log(log_id):
+    if not supabase: return
+    try:
+        supabase.table("fire_sales_logs").delete().eq("id", log_id).execute()
+    except:
+        pass
 
 def update_db_credit_payment(log_id, new_paid_total, new_balance_due, status, payment_str):
     if not supabase: return
@@ -229,24 +236,27 @@ with st.sidebar:
 st.title("🧯 SHIVRAJ FIRE SERVICE & INDUSTRIAL GASES 🏥")
 st.markdown("📍 **Address:** Laxmi Nagar, Near Old BSNL Office, Malkapur, Dist. Buldhana")
 st.markdown("👥 **Proprietors:** Swapnil Deshmukh | Ganesh Deshmukh (📞 **9011763817**)")
-st.caption("Fire Safety Solutions, Medical Oxygen Supply & Industrial Gases (Nitrogen, Hydrogen, Chemical Gases) Management")
+st.caption("Fire Safety Solutions, Medical Oxygen Supply & Industrial Gases Management")
 st.divider()
 
 current_logs = get_db_logs()
 all_expenses = get_db_expenses()
+all_products = get_db_products()
 
 total_sales = sum(l['amount'] for l in current_logs)
 total_gross_profit = sum(l.get('profit', 0) for l in current_logs)
 total_expenses_amt = sum(e['amount'] for e in all_expenses)
 total_credit_due = sum(l['balance_due'] for l in current_logs)
 net_profit = total_gross_profit - total_expenses_amt
+total_cylinders_stock = sum(p['stock_qty'] for p in all_products.values())
 
 # Top Metrics
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Revenue", f"₹{total_sales:,.2f}")
-m2.metric("📦 Total Orders", f"{len(current_logs)}")
-m3.metric("🔴 Pending Credit (उधारी)", f"₹{total_credit_due:,.2f}", delta_color="inverse")
-m4.metric("📈 True Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("💰 Revenue", f"₹{total_sales:,.2f}")
+m2.metric("📦 Stock In Hand", f"{int(total_cylinders_stock)} Units")
+m3.metric("📜 Orders", f"{len(current_logs)}")
+m4.metric("🔴 Credit (उधारी)", f"₹{total_credit_due:,.2f}", delta_color="inverse")
+m5.metric("📈 Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
 
 st.divider()
 
@@ -265,7 +275,6 @@ with tab1:
     if not prods:
         st.info("No items or gases found in inventory.")
     else:
-        # Category Filter
         cat_filter = st.selectbox("🔍 Filter by Category:", ["All Categories", "🧯 Fire Safety Equipment", "🏥 Medical Oxygen Gases", "🏭 Industrial & Chemical Gases", "⚙️ Accessories & Spares"])
         
         filtered_prods = {}
@@ -306,7 +315,7 @@ with tab1:
                             st.rerun()
 
 with tab2:
-    st.subheader("Sales History & WhatsApp Invoices")
+    st.subheader("Sales History, Invoices & Delete Control")
     logs = get_db_logs()
     if not logs:
         st.info("No transaction logs available.")
@@ -316,9 +325,31 @@ with tab2:
         
         for log in reversed(filtered):
             with st.container(border=True):
-                st.markdown(f"**Date:** `{log['time']}` | **Client:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
-                st.markdown(f"💰 **Total Invoice:** ₹{log['amount']:,.2f} | 💵 **Paid:** ₹{log['paid_amount']:,.2f} | 🔴 **Due Balance:** **₹{log['balance_due']:,.2f}**")
+                c_head, c_del = st.columns([4, 1])
+                with c_head:
+                    st.markdown(f"**Date:** `{log['time']}` | **Client:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
+                    st.markdown(f"💰 **Total Invoice:** ₹{log['amount']:,.2f} | 💵 **Paid:** ₹{log['paid_amount']:,.2f} | 🔴 **Due Balance:** **₹{log['balance_due']:,.2f}**")
                 
+                with c_del:
+                    if st.button("🗑️ Delete Bill", key=f"del_log_{log['id']}", type="secondary"):
+                        st.session_state[f"confirm_del_{log['id']}"] = True
+
+                if st.session_state.get(f"confirm_del_{log['id']}", False):
+                    del_pass = st.text_input(f"Enter Admin Password to delete Bill #{log['id']}:", type="password", key=f"p_del_{log['id']}")
+                    if st.button("Confirm Delete", key=f"btn_cdel_{log['id']}"):
+                        if del_pass == "admin123":
+                            # Restore Stock Quantity
+                            cur_prods = get_db_products()
+                            for item in log['items']:
+                                if item['pid'] in cur_prods:
+                                    update_db_stock(item['pid'], cur_prods[item['pid']]['stock_qty'] + float(item['qty']))
+                            
+                            delete_db_log(log['id'])
+                            st.success(f"Bill #{log['id']} deleted successfully and stock restored!")
+                            st.rerun()
+                        else:
+                            st.error("Incorrect Password!")
+
                 if log.get('phone'):
                     wa_url = f"https://wa.me/{log['phone']}?text={urllib.parse.quote(log['msg'])}"
                     st.markdown(f"📲 [Send WhatsApp Invoice & Certificate Note]({wa_url})")
@@ -373,17 +404,17 @@ with tab4:
             st.metric("True Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
 
 with tab5:
-    st.subheader("⚙️ Inventory & Stock Control")
+    st.subheader("⚙️ Inventory & Cylinder Control")
     admin_inv = st.text_input("Enter Admin Password:", type="password", key="pass_inv")
     if admin_inv == "admin123":
         ic1, ic2 = st.columns(2)
         with ic1:
             st.markdown("### **Add / Update Gas Cylinder or Equipment**")
             pid = st.text_input("Item ID (e.g. FS105 / MO101 / IG201):").strip().upper()
-            pname = st.text_input("Product / Cylinder Name (e.g. ABC Extinguisher / Medical Oxygen Jumbo):").strip()
+            pname = st.text_input("Product / Cylinder Name (e.g. Mechanical Foam / DCP Powder / ABC Extinguisher):").strip()
             pcat = st.selectbox("Category:", ["🧯 Fire Safety Equipment", "🏥 Medical Oxygen Gases", "🏭 Industrial & Chemical Gases", "⚙️ Accessories & Spares"])
-            pgas = st.selectbox("Gas / Type:", ["ABC Powder", "CO2", "Foam", "Water", "Medical Oxygen (O2)", "Nitrogen (N2)", "Hydrogen (H2)", "Argon", "Acetylene (DA)", "Chemical Mix / N/A"])
-            pcap = st.selectbox("Capacity / Size:", ["1 KG / Litre", "2 KG", "4 KG", "4.5 KG", "6 KG", "9 KG", "10 Litre (B-Type)", "47 Litre (Jumbo D-Type)", "15 Mtr", "N/A"])
+            pgas = st.selectbox("Gas / Type:", ["ABC Powder", "BC Powder", "DCP Powder", "M-Foam (Mechanical Foam)", "CO2", "Water", "Medical Oxygen (O2)", "Nitrogen (N2)", "Hydrogen (H2)", "Argon", "Acetylene (DA)", "Chemical Mix / N/A"])
+            pcap = st.selectbox("Capacity / Size:", ["1 KG / Litre", "2 KG", "4 KG", "4.5 KG", "5 KG", "6 KG", "9 KG", "25 KG", "25 Litre", "50 KG", "50 Litre", "10 Litre (B-Type)", "47 Litre (Jumbo D-Type)", "15 Mtr", "N/A"])
             pserv = st.selectbox("Service Type:", ["New Supply", "Refilling Service", "Cylinder Rental / Deposit"])
             
             pcost = float(st.number_input("Cost Price (₹):", value=500.0))
