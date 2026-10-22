@@ -172,7 +172,7 @@ with st.sidebar:
         paid_amount = float(st.number_input("Amount Paid Now (₹):", min_value=0.0, max_value=float(cart_total), value=float(cart_total)))
         credit_amount = float(max(0.0, cart_total - paid_amount))
 
-        if st.button("Confirm Order & Generate WhatsApp Invoice", type="primary", use_container_width=True):
+        if st.button("Confirm Order & Generate Invoice", type="primary", use_container_width=True):
             if not buyer_name or not location:
                 st.error("❌ Please fill in Customer Name and Location Address.")
             elif not st.session_state.cart:
@@ -195,29 +195,45 @@ with st.sidebar:
                     timestamp = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
                     next_refill_date = (datetime.datetime.now() + datetime.timedelta(days=365)).strftime("%d-%m-%Y")
                     
-                    items_str = "\n".join([f"- {it['name']} [{it['capacity']} - {it['service_type']}] ({it['qty']} Qty @ ₹{it['price']})" for it in st.session_state.cart])
+                    items_formatted = []
+                    for it in st.session_state.cart:
+                        items_formatted.append(f"• *{it['name']}*\n  [{it['capacity']} | {it['service_type']}]\n  └ Qty: {it['qty']} Nos @ ₹{it['price']:,.2f} = ₹{(it['qty']*it['price']):,.2f}")
+                    
+                    items_str = "\n\n".join(items_formatted)
                     payment_desc = f"{payment_mode} (Paid: ₹{paid_amount:,.2f})"
 
                     wa_msg = (
-                        f"🧯 *SHIVRAJ FIRE & INDUSTRIAL GASES* 🏥\n"
-                        f"📍 *Address:* Laxmi Nagar, Near Old BSNL Office,\n"
-                        f"Malkapur, Dist. Buldhana\n"
+                        f"====================================\n"
+                        f"🧾 *SHIVRAJ FIRE SERVICE & INDUSTRIAL GASES*\n"
+                        f"📍 *Address:* Laxmi Nagar, Near Old BSNL Office, Malkapur, Dist. Buldhana\n"
                         f"👥 *Prop:* Swapnil Deshmukh & Ganesh Deshmukh\n"
                         f"📞 *Contact:* 9011763817 (Ganesh Deshmukh)\n"
-                        f"--------------------------------\n"
-                        f"📅 Date: {timestamp}\n"
-                        f"👤 Client/Hospital: {buyer_name}\n"
-                        f"📍 Site Address: {location}\n"
-                        f"--------------------------------\n"
-                        f"📦 Items & Cylinder Services:\n{items_str}\n"
-                        f"--------------------------------\n"
-                        f"💰 Total Amount: ₹{cart_total:,.2f}\n"
-                        f"💵 Paid Amount: ₹{paid_amount:,.2f}\n"
-                        f"🔴 Balance Due: ₹{credit_amount:,.2f}\n"
-                        f"--------------------------------\n"
-                        f"🗓️ *Next Refilling / Service Due Date:* {next_refill_date}\n"
-                        f"🛡️ *Guarantee/Warranty:* 1 Year Testing & Safety Warranty\n"
-                        f"Thank you for choosing Shivraj Services! 🙏"
+                        f"====================================\n\n"
+                        f"📝 *INVOICE DETAILS*\n"
+                        f"------------------------------------\n"
+                        f"📅 *Date & Time:* {timestamp}\n"
+                        f"👤 *Client Name:* {buyer_name}\n"
+                        f"📍 *Site Location:* {location}\n"
+                        f"📞 *Phone:* {buyer_phone if buyer_phone else 'N/A'}\n\n"
+                        f"------------------------------------\n"
+                        f"📦 *ITEMS & SERVICES SUPPLIED*\n"
+                        f"------------------------------------\n"
+                        f"{items_str}\n\n"
+                        f"------------------------------------\n"
+                        f"💰 *PAYMENT SUMMARY*\n"
+                        f"------------------------------------\n"
+                        f"💵 *Grand Total:* ₹{cart_total:,.2f}\n"
+                        f"✅ *Amount Paid:* ₹{paid_amount:,.2f}\n"
+                        f"🔴 *Balance Due:* ₹{credit_amount:,.2f}\n"
+                        f"💳 *Payment Mode:* {payment_mode}\n\n"
+                        f"------------------------------------\n"
+                        f"🛡️ *SERVICE & TESTING WARRANTY*\n"
+                        f"------------------------------------\n"
+                        f"🗓️ *Next Service / Refill Due Date:* {next_refill_date}\n"
+                        f"📜 *Guarantee:* 1 Year Hydraulic & Safety Testing Warranty Valid.\n\n"
+                        f"====================================\n"
+                        f"🙏 *Thank you for choosing Shivraj Services!*\n"
+                        f"For urgent gas refilling & support, call 9011763817."
                     )
 
                     insert_db_log({
@@ -250,13 +266,13 @@ total_credit_due = sum(l['balance_due'] for l in current_logs)
 net_profit = total_gross_profit - total_expenses_amt
 total_cylinders_stock = sum(p['stock_qty'] for p in all_products.values())
 
-# Top Metrics
+# --- FULL VISIBILITY METRICS FIX (... च्या समस्येवर तोडगा) ---
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("💰 Revenue", f"₹{total_sales:,.2f}")
-m2.metric("📦 Stock In Hand", f"{int(total_cylinders_stock)} Units")
-m3.metric("📜 Orders", f"{len(current_logs)}")
-m4.metric("🔴 Credit (उधारी)", f"₹{total_credit_due:,.2f}", delta_color="inverse")
-m5.metric("📈 Net Profit", f"₹{net_profit:,.2f}", delta_color="normal" if net_profit >= 0 else "inverse")
+m1.markdown(f"**💰 Revenue**  \n### ₹{total_sales:,.2f}")
+m2.markdown(f"**📦 Stock In Hand**  \n### {int(total_cylinders_stock)} Units")
+m3.markdown(f"**📜 Orders**  \n### {len(current_logs)}")
+m4.markdown(f"**🔴 Credit (उधारी)**  \n### ₹{total_credit_due:,.2f}")
+m5.markdown(f"**📈 Net Profit**  \n### ₹{net_profit:,.2f}")
 
 st.divider()
 
@@ -315,8 +331,27 @@ with tab1:
                             st.rerun()
 
 with tab2:
-    st.subheader("Sales History, Invoices & Delete Control")
+    st.subheader("Sales History, Invoices & Reports")
     logs = get_db_logs()
+    
+    # --- EXPORT DATA BUTTONS (CSV / EXCEL) ---
+    if logs:
+        df_export = pd.DataFrame(logs)
+        df_export_cleaned = df_export[['id', 'time', 'buyer', 'phone', 'location', 'amount', 'paid_amount', 'balance_due', 'status']]
+        df_export_cleaned.columns = ['Invoice ID', 'Date', 'Customer Name', 'Phone', 'Location', 'Total Amount', 'Paid Amount', 'Balance Due', 'Payment Status']
+        
+        col_exp1, col_exp2 = st.columns([1, 4])
+        with col_exp1:
+            csv_data = df_export_cleaned.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export Sales Report (CSV)",
+                data=csv_data,
+                file_name=f"Shivraj_Fire_Sales_Report_{datetime.datetime.now().strftime('%d_%m_%Y')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+    st.divider()
+
     if not logs:
         st.info("No transaction logs available.")
     else:
@@ -327,7 +362,7 @@ with tab2:
             with st.container(border=True):
                 c_head, c_del = st.columns([4, 1])
                 with c_head:
-                    st.markdown(f"**Date:** `{log['time']}` | **Client:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
+                    st.markdown(f"**Invoice ID:** `#{log['id']}` | **Date:** `{log['time']}` | **Client:** 👤 **{log['buyer']}** (`{log['location']}`) | **Status:** {log['status']}")
                     st.markdown(f"💰 **Total Invoice:** ₹{log['amount']:,.2f} | 💵 **Paid:** ₹{log['paid_amount']:,.2f} | 🔴 **Due Balance:** **₹{log['balance_due']:,.2f}**")
                 
                 with c_del:
@@ -338,7 +373,6 @@ with tab2:
                     del_pass = st.text_input(f"Enter Admin Password to delete Bill #{log['id']}:", type="password", key=f"p_del_{log['id']}")
                     if st.button("Confirm Delete", key=f"btn_cdel_{log['id']}"):
                         if del_pass == "admin123":
-                            # Restore Stock Quantity
                             cur_prods = get_db_products()
                             for item in log['items']:
                                 if item['pid'] in cur_prods:
@@ -350,9 +384,13 @@ with tab2:
                         else:
                             st.error("Incorrect Password!")
 
+                # --- VIEW & PRINTABLE BILL ---
+                with st.expander(f"📄 View Full Invoice Copy (#{log['id']})"):
+                    st.text(log['msg'])
+
                 if log.get('phone'):
                     wa_url = f"https://wa.me/{log['phone']}?text={urllib.parse.quote(log['msg'])}"
-                    st.markdown(f"📲 [Send WhatsApp Invoice & Certificate Note]({wa_url})")
+                    st.markdown(f"📲 [Send Professional WhatsApp Invoice]({wa_url})")
 
 with tab3:
     st.subheader("📉 Credit Ledger & Balance Dues (उधारी ट्रॅकिंग)")
