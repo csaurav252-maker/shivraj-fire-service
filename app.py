@@ -5,10 +5,9 @@ import pandas as pd
 import json
 from supabase import create_client, Client
 
-# --- SUPABASE CONFIGURATION ---
-SUPABASE_URL = "https://fwlckedxrtkymwqbegos.supabase.co"
-SUPABASE_KEY = "sb_publishable_UJinMiq1Fln8ckiLH0cvlA_2ApxVLLS"
-
+# --- SUPABASE CONFIGURATION (SECURE) ---
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 @st.cache_resource
 def init_supabase():
     try:
