@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import json
 from supabase import create_client, Client
+import gst_invoice as gst   # GST tax calculation + "ORIGINAL FOR RECIPIENT" PDF
 
 # --- SUPABASE CONFIGURATION (SECURE) ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -34,7 +35,10 @@ def get_db_products():
                 "service_type": r.get("service_type", "Supply"),
                 "cost_price": float(r.get("cost_price", 0)),
                 "price_per_unit": float(r.get("price_per_unit", 0)),
-                "stock_qty": float(r.get("stock_qty", 0))
+                "stock_qty": float(r.get("stock_qty", 0)),
+                # optional columns (leave empty to use defaults from gst_invoice.py)
+                "hsn_code": r.get("hsn_code") or "",
+                "gst_rate": r.get("gst_rate")
             }
         return prods
     except Exception as e:
@@ -84,10 +88,16 @@ def get_db_logs():
                 items_parsed = json.loads(r["items"]) if isinstance(r["items"], str) else r["items"]
             except:
                 items_parsed = []
-            
+
+            # New bills store {"lines": [...], "meta": {...}}; old bills store just a list.
+            meta_parsed = {}
+            if isinstance(items_parsed, dict):
+                meta_parsed = items_parsed.get("meta", {}) or {}
+                items_parsed = items_parsed.get("lines", []) or []
+
             logs.append({
                 "id": r["id"], "time": r["time"], "buyer": r["buyer"], "phone": r["phone"], "location": r["location"],
-                "items": items_parsed, "amount": float(r["amount"]), "paid_amount": float(r["paid_amount"]), 
+                "items": items_parsed, "meta": meta_parsed, "amount": float(r["amount"]), "paid_amount": float(r["paid_amount"]), 
                 "profit": float(r.get("profit", 0)), "balance_due": float(r["balance_due"]), 
                 "payment": r["payment"], "msg": r["msg"], "status": r["status"]
             })
@@ -100,7 +110,7 @@ def insert_db_log(log_data):
     try:
         payload = {
             "time": log_data['time'], "buyer": log_data['buyer'], "phone": log_data['phone'], "location": log_data['location'],
-            "items": json.dumps(log_data['items']), "amount": log_data['amount'], "paid_amount": log_data['paid_amount'],
+            "items": json.dumps({"lines": log_data['items'], "meta": log_data.get('meta', {})}), "amount": log_data['amount'], "paid_amount": log_data['paid_amount'],
             "profit": log_data['profit'], "balance_due": log_data['balance_due'], "payment": log_data['payment'],
             "msg": log_data['msg'], "status": log_data['status']
         }
@@ -149,24 +159,69 @@ with st.sidebar:
     if not st.session_state.cart:
         st.info("Cart is currently empty.")
     else:
-        cart_total = 0.0
         for index, c_item in enumerate(st.session_state.cart):
             item_cost = float(c_item['price']) * float(c_item['qty'])
-            cart_total += item_cost
             st.markdown(f"**{index+1}. {c_item['name']}**\n[{c_item['capacity']} | {c_item['service_type']}]\n{c_item['qty']} Qty x ₹{c_item['price']:,.2f} = **₹{item_cost:,.2f}**")
 
         if st.button("🗑️ Clear Cart"):
             st.session_state.cart = []
             st.rerun()
 
+        st.divider()
+
+        # --- GST SETTINGS ---
+        st.subheader("🧾 GST Details")
+        price_mode_label = st.radio(
+            "Item rates entered are:",
+            ["Without GST (GST added on top)", "With GST (GST already included)"],
+            help="Choose 'With GST' if your selling rates already include GST, then the bill total stays the same."
+        )
+        price_mode = "exclusive" if price_mode_label.startswith("Without") else "inclusive"
+
+        state_options = [f"{code} - {name}" for code, name in gst.STATES.items()]
+        seller_state_idx = list(gst.STATES.keys()).index(gst.SELLER["state_code"])
+        cust_state = st.selectbox("Customer State (Place of Supply):", state_options, index=seller_state_idx)
+        cust_state_code = cust_state.split(" - ")[0]
+        buyer_gstin = st.text_input("Customer GSTIN (if registered):").strip().upper()
+        is_intra = (cust_state_code == gst.SELLER["state_code"])
+
+        if buyer_gstin and not gst.is_valid_gstin(buyer_gstin):
+            st.warning("⚠️ GSTIN format looks wrong (15 characters needed).")
+        elif buyer_gstin and buyer_gstin[:2] != cust_state_code:
+            st.warning(f"⚠️ GSTIN starts with state code {buyer_gstin[:2]} but the selected state is {cust_state_code}.")
+
+        # Resolve HSN / GST % for every cart line (product row override -> defaults) and calculate tax
+        all_prods_for_gst = get_db_products()
+        gst_lines = []
+        for c_item in st.session_state.cart:
+            prod = all_prods_for_gst.get(c_item['pid'], {})
+            line = dict(c_item)
+            line["category"] = prod.get("category", c_item.get("category", ""))
+            line["gas_type"] = prod.get("gas_type", c_item.get("gas_type", ""))
+            line["hsn"] = prod.get("hsn_code") or c_item.get("hsn") or ""
+            line["gst_rate"] = prod.get("gst_rate") if prod.get("gst_rate") not in (None, "") else c_item.get("gst_rate")
+            hsn_v, rate_v = gst.line_tax_info(line)
+            line["hsn"], line["gst_rate"] = hsn_v, float(rate_v)
+            gst_lines.append(line)
+
+        inv_calc = gst.compute_invoice(gst_lines, price_mode, is_intra)
+        cart_total = float(inv_calc["grand_total"])
+
+        st.markdown(f"Taxable Value: ₹{float(inv_calc['taxable']):,.2f}")
+        if is_intra:
+            st.markdown(f"CGST: ₹{float(inv_calc['cgst']):,.2f}  \nSGST: ₹{float(inv_calc['sgst']):,.2f}")
+        else:
+            st.markdown(f"IGST: ₹{float(inv_calc['igst']):,.2f}")
+        if inv_calc["round_off"] != 0:
+            st.markdown(f"Round Off: ₹{float(inv_calc['round_off']):,.2f}")
         st.markdown(f"### **Grand Total: ₹{cart_total:,.2f}**")
         st.divider()
-        
+
         st.subheader("📝 Customer & Site Details")
         buyer_name = st.text_input("Customer / Hospital / Factory Name:").strip()
         buyer_phone = st.text_input("WhatsApp Phone Number:").strip()
         location = st.text_input("Site / Plant / Address:").strip()
-        
+
         payment_mode = st.selectbox("Payment Method:", ["Cash", "UPI / GPay / PhonePe", "Bank Transfer", "Cheque"])
         paid_amount = float(st.number_input("Amount Paid Now (₹):", min_value=0.0, max_value=float(cart_total), value=float(cart_total)))
         credit_amount = float(max(0.0, cart_total - paid_amount))
@@ -176,6 +231,8 @@ with st.sidebar:
                 st.error("❌ Please fill in Customer Name and Location Address.")
             elif not st.session_state.cart:
                 st.error("❌ Cart is empty.")
+            elif buyer_gstin and not gst.is_valid_gstin(buyer_gstin):
+                st.error("❌ Customer GSTIN is not valid. Correct it or leave it empty for an unregistered customer.")
             else:
                 current_prods = get_db_products()
                 stock_error = False
@@ -186,7 +243,11 @@ with st.sidebar:
                         break
 
                 if not stock_error:
-                    total_profit = sum((float(c_item['price']) - float(current_prods[c_item['pid']]['cost_price'])) * float(c_item['qty']) for c_item in st.session_state.cart)
+                    # Profit is calculated on the taxable value (GST is not your income)
+                    total_profit = sum(
+                        float(inv_line['taxable']) - float(current_prods[c_item['pid']]['cost_price']) * float(c_item['qty'])
+                        for c_item, inv_line in zip(st.session_state.cart, inv_calc['lines'])
+                    )
 
                     for c_item in st.session_state.cart:
                         update_db_stock(c_item['pid'], current_prods[c_item['pid']]['stock_qty'] - float(c_item['qty']))
@@ -195,16 +256,30 @@ with st.sidebar:
                     next_refill_date = (datetime.datetime.now() + datetime.timedelta(days=365)).strftime("%d-%m-%Y")
                     
                     items_formatted = []
-                    for it in st.session_state.cart:
-                        items_formatted.append(f"• *{it['name']}*\n  [{it['capacity']} | {it['service_type']}]\n  └ Qty: {it['qty']} Nos @ ₹{it['price']:,.2f} = ₹{(it['qty']*it['price']):,.2f}")
-                    
+                    for inv_line in inv_calc['lines']:
+                        items_formatted.append(
+                            f"• *{inv_line['name']}*\n  [{inv_line['capacity']} | {inv_line['service_type']}]\n"
+                            f"  └ Qty: {gst.fmt_qty(inv_line['qty'])} Nos @ ₹{float(inv_line['unit_rate']):,.2f} = ₹{float(inv_line['taxable']):,.2f}\n"
+                            f"  └ HSN/SAC: {inv_line['hsn']} | GST: {inv_line['gst_rate'].normalize():f}%"
+                        )
+
                     items_str = "\n\n".join(items_formatted)
                     payment_desc = f"{payment_mode} (Paid: ₹{paid_amount:,.2f})"
 
+                    if is_intra:
+                        tax_lines = (f"🧮 *CGST:* ₹{float(inv_calc['cgst']):,.2f}\n"
+                                     f"🧮 *SGST:* ₹{float(inv_calc['sgst']):,.2f}\n")
+                    else:
+                        tax_lines = f"🧮 *IGST:* ₹{float(inv_calc['igst']):,.2f}\n"
+                    seller_gstin_line = f"🆔 *GSTIN:* {gst.SELLER['gstin']}\n" if gst.SELLER["gstin"] else ""
+                    buyer_gstin_line = f"🆔 *Client GSTIN:* {buyer_gstin}\n" if buyer_gstin else ""
+
                     wa_msg = (
                         f"====================================\n"
+                        f"🧾 *TAX INVOICE*\n"
                         f"🧾 *SHIVRAJ FIRE SERVICE & INDUSTRIAL GASES*\n"
                         f"📍 *Address:* Laxmi Nagar, Near Old BSNL Office, Malkapur, Dist. Buldhana\n"
+                        f"{seller_gstin_line}"
                         f"👥 *Prop:* Swapnil Deshmukh & Ganesh Deshmukh\n"
                         f"📞 *Contact:* 9011763817 (Ganesh Deshmukh)\n"
                         f"====================================\n\n"
@@ -212,7 +287,9 @@ with st.sidebar:
                         f"------------------------------------\n"
                         f"📅 *Date & Time:* {timestamp}\n"
                         f"👤 *Client Name:* {buyer_name}\n"
+                        f"{buyer_gstin_line}"
                         f"📍 *Site Location:* {location}\n"
+                        f"🏛️ *Place of Supply:* {gst.STATES.get(cust_state_code, '')} ({cust_state_code})\n"
                         f"📞 *Phone:* {buyer_phone if buyer_phone else 'N/A'}\n\n"
                         f"------------------------------------\n"
                         f"📦 *ITEMS & SERVICES SUPPLIED*\n"
@@ -221,6 +298,9 @@ with st.sidebar:
                         f"------------------------------------\n"
                         f"💰 *PAYMENT SUMMARY*\n"
                         f"------------------------------------\n"
+                        f"💵 *Taxable Value:* ₹{float(inv_calc['taxable']):,.2f}\n"
+                        f"{tax_lines}"
+                        f"➕ *Round Off:* ₹{float(inv_calc['round_off']):,.2f}\n"
                         f"💵 *Grand Total:* ₹{cart_total:,.2f}\n"
                         f"✅ *Amount Paid:* ₹{paid_amount:,.2f}\n"
                         f"🔴 *Balance Due:* ₹{credit_amount:,.2f}\n"
@@ -237,7 +317,9 @@ with st.sidebar:
 
                     insert_db_log({
                         "time": timestamp, "buyer": buyer_name, "phone": buyer_phone, "location": location,
-                        "items": list(st.session_state.cart), "amount": float(cart_total), "paid_amount": float(paid_amount),
+                        "items": gst_lines,
+                        "meta": {"gstin": buyer_gstin, "state_code": cust_state_code, "price_mode": price_mode},
+                        "amount": float(cart_total), "paid_amount": float(paid_amount),
                         "profit": float(total_profit), "balance_due": float(credit_amount), "payment": payment_desc,
                         "msg": wa_msg, "status": f"Pending (Due: ₹{credit_amount:,.2f})" if credit_amount > 0 else "Paid"
                     })
@@ -252,6 +334,8 @@ st.title("🧯 SHIVRAJ FIRE SERVICE & INDUSTRIAL GASES 🏥")
 st.markdown("📍 **Address:** Laxmi Nagar, Near Old BSNL Office, Malkapur, Dist. Buldhana")
 st.markdown("👥 **Proprietors:** Swapnil Deshmukh | Ganesh Deshmukh (📞 **9011763817**)")
 st.caption("Fire Safety Solutions, Medical Oxygen Supply & Industrial Gases Management")
+if not gst.SELLER["gstin"]:
+    st.warning("⚠️ Your shop GSTIN is not set. Open gst_invoice.py, fill SELLER → \"gstin\", then redeploy. Until then the invoice PDF shows a blank GSTIN line.")
 st.divider()
 
 current_logs = get_db_logs()
@@ -324,7 +408,8 @@ with tab1:
                             else:
                                 st.session_state.cart.append({
                                     "pid": pid, "name": p['name'], "price": p['price_per_unit'], 
-                                    "qty": qty_inp, "capacity": p['capacity'], "service_type": p['service_type']
+                                    "qty": qty_inp, "capacity": p['capacity'], "service_type": p['service_type'],
+                                    "category": p['category'], "gas_type": p['gas_type']
                                 })
                             st.success("Item added to cart!")
                             st.rerun()
@@ -386,6 +471,25 @@ with tab2:
                 # --- VIEW & PRINTABLE BILL ---
                 with st.expander(f"📄 View Full Invoice Copy (#{log['id']})"):
                     st.text(log['msg'])
+
+                # --- GST TAX INVOICE PDF (ORIGINAL FOR RECIPIENT) ---
+                pdf_key = f"pdf_bytes_{log['id']}"
+                inv_no = gst.invoice_number(log['id'], log['time'])
+                if pdf_key not in st.session_state:
+                    if st.button("🖨️ Create GST Invoice PDF", key=f"mk_pdf_{log['id']}"):
+                        try:
+                            st.session_state[pdf_key] = gst.build_invoice_pdf(log)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"PDF could not be created: {e}")
+                else:
+                    st.download_button(
+                        label=f"📥 Download Tax Invoice {inv_no} (ORIGINAL FOR RECIPIENT)",
+                        data=st.session_state[pdf_key],
+                        file_name=f"Invoice_{inv_no.replace('/', '-')}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_pdf_{log['id']}"
+                    )
 
                 if log.get('phone'):
                     wa_url = f"https://wa.me/{log['phone']}?text={urllib.parse.quote(log['msg'])}"
